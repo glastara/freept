@@ -188,7 +188,7 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
                 <SelectTrigger className="h-auto w-auto border-none bg-transparent px-2 py-1 text-xs text-muted-foreground shadow-none hover:text-foreground focus:ring-0">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="min-w-[320px]">
                   {models.map((m) => (
                     <SelectItem key={m.id} value={m.id}>
                       {m.name}
