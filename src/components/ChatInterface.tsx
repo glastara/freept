@@ -51,16 +51,18 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
     setMessages(history);
     setInput("");
     setIsStreaming(true);
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, model }),
+        body: JSON.stringify({ messages: history, model }), // history excludes the assistant placeholder intentionally
       });
 
       if (!res.ok || !res.body) throw new Error("Request failed");
+
+      // Append assistant placeholder only once we know the request succeeded
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -79,7 +81,8 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
           return updated;
         });
       }
-    } catch {
+    } catch (e) {
+      console.error("chat stream error", e);
       setMessages((prev) => {
         const updated = [...prev];
         updated[updated.length - 1] = {
