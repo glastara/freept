@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ChatContainerContent,
   ChatContainerRoot,
@@ -23,12 +23,14 @@ import { Button } from "@/components/ui/button";
 import { ArrowUp } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { ScrollButton } from "@/components/ui/scroll-button";
-import { ChatMessage, Model } from "@/lib/types";
+import { ChatMessage, Conversation, Model } from "@/lib/types";
 
 type Props = {
   model: string;
   models: Model[];
   onModelChange: (id: string) => void;
+  activeConversation: Conversation | null;
+  onMessagesChange: (messages: ChatMessage[]) => void;
 };
 
 function handleModelChange(
@@ -39,24 +41,48 @@ function handleModelChange(
   };
 }
 
-export function ChatInterface({ model, models, onModelChange }: Props) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export function ChatInterface({
+  model,
+  models,
+  onModelChange,
+  activeConversation,
+  onMessagesChange,
+}: Props) {
+  const [messages, setMessages] = useState<ChatMessage[]>(
+    activeConversation?.messages ?? []
+  );
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const submittingRef = useRef(false);
+  // Capture the active conversation id at submit time so streaming callbacks
+  // always write to the right conversation even if the user switches.
+  const streamingConvoIdRef = useRef<string | undefined>(undefined);
+
+  // Sync messages when the active conversation changes externally (sidebar click / new chat)
+  useEffect(() => {
+    setMessages(activeConversation?.messages ?? []);
+    setInput("");
+  }, [activeConversation?.id]);
+
+  function updateMessages(updated: ChatMessage[]) {
+    setMessages(updated);
+    onMessagesChange(updated);
+  }
 
   async function handleSubmit() {
     const trimmed = input.trim();
     if (!trimmed || submittingRef.current) return;
     submittingRef.current = true;
 
+    // Capture the conversation id at submit time (may be undefined for a brand-new chat)
+    streamingConvoIdRef.current = activeConversation?.id;
+
     const userMsg: ChatMessage = { role: "user", content: trimmed };
     const history = [...messages, userMsg];
-    setMessages(history);
+    updateMessages(history);
     setInput("");
     setIsStreaming(true);
 
-    // Strip error messages and non-standard fields before sending to API
     const apiMessages = history
       .filter((m) => !m.isError)
       .map(({ role, content }) => ({ role, content }));
@@ -70,8 +96,11 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
 
       if (!res.ok || !res.body) throw new Error("Request failed");
 
-      // Append assistant placeholder only once we know the request succeeded
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+      setMessages((prev) => {
+        const next = [...prev, { role: "assistant" as const, content: "" }];
+        onMessagesChange(next);
+        return next;
+      });
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -87,17 +116,18 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
             ...last,
             content: last.content + chunk,
           };
+          onMessagesChange(updated);
           return updated;
         });
       }
 
-      // Flush any buffered multi-byte characters (e.g. emoji, CJK) from the decoder
       const trailing = decoder.decode();
       if (trailing) {
         setMessages((prev) => {
           const updated = [...prev];
           const last = updated[updated.length - 1];
           updated[updated.length - 1] = { ...last, content: last.content + trailing };
+          onMessagesChange(updated);
           return updated;
         });
       }
@@ -107,12 +137,14 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
       setMessages((prev) => {
         const updated = [...prev];
         const last = updated[updated.length - 1];
+        let next: ChatMessage[];
         if (last.role === "assistant") {
-          updated[updated.length - 1] = { ...last, content: msg, isError: true };
+          next = [...updated.slice(0, -1), { ...last, content: msg, isError: true }];
         } else {
-          updated.push({ role: "assistant", content: msg, isError: true });
+          next = [...updated, { role: "assistant", content: msg, isError: true }];
         }
-        return updated;
+        onMessagesChange(next);
+        return next;
       });
     } finally {
       submittingRef.current = false;
@@ -128,7 +160,7 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
           <ChatContainerContent className="py-6 px-4 max-w-3xl mx-auto w-full space-y-4">
             {messages.length === 0 ? (
               <div className="flex min-h-[60vh] flex-col items-center justify-center gap-2">
-                <p className="text-2xl font-semibold">What can I help with?</p>
+                <p className="text-2xl font-semibold">Ask anything. It's on the house.</p>
                 <p className="text-muted-foreground text-sm">Powered by free models via OpenRouter</p>
               </div>
             ) : (
@@ -156,7 +188,6 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
                 </Message>
               ))
             )}
-            {/* Pending indicator: request in-flight but no assistant message yet */}
             {isStreaming && messages[messages.length - 1]?.role === "user" && (
               <Message className="justify-start">
                 <Loader variant="typing" size="sm" className="mt-1 ml-1" />
@@ -183,7 +214,6 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
           >
             <PromptInputTextarea placeholder="How can I help you today?" />
             <PromptInputActions className="justify-between pt-1">
-              {/* Model selector — left */}
               <Select value={model} onValueChange={handleModelChange(onModelChange)}>
                 <SelectTrigger className="h-auto w-auto border-none bg-transparent px-2 py-1 text-xs text-muted-foreground shadow-none hover:text-foreground focus:ring-0">
                   <SelectValue />
@@ -197,7 +227,6 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
                 </SelectContent>
               </Select>
 
-              {/* Send button — right */}
               <Button
                 size="icon"
                 className="h-8 w-8 rounded-full"

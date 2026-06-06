@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { Model } from "@/lib/types";
 import { ChatInterface } from "@/components/ChatInterface";
+import { Sidebar } from "@/components/Sidebar";
+import { useConversations } from "@/lib/useConversations";
 
 const STORAGE_KEY = "freept-model";
 
@@ -11,6 +13,17 @@ export default function Home() {
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const {
+    conversations,
+    activeConversation,
+    activeId,
+    searchQuery,
+    setSearchQuery,
+    newChat,
+    selectConversation,
+    saveMessages,
+  } = useConversations();
 
   useEffect(() => {
     fetch("/api/models")
@@ -35,30 +48,39 @@ export default function Home() {
   }
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="border-b px-4 py-3 shrink-0 flex items-center justify-between">
-        <h1 className="text-sm font-semibold">FreePT</h1>
-      </header>
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar
+        conversations={conversations}
+        activeId={activeId}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        onNewChat={newChat}
+        onSelect={selectConversation}
+      />
 
-      {loading && (
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-muted-foreground text-sm">Loading models…</p>
-        </div>
-      )}
+      <div className="flex flex-col flex-1 min-w-0">
+        {loading && (
+          <div className="flex flex-1 items-center justify-center">
+            <p className="text-muted-foreground text-sm">Loading models…</p>
+          </div>
+        )}
 
-      {error && (
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-destructive text-sm">Error: {error}</p>
-        </div>
-      )}
+        {error && (
+          <div className="flex flex-1 items-center justify-center">
+            <p className="text-destructive text-sm">Error: {error}</p>
+          </div>
+        )}
 
-      {!loading && !error && (
-        <ChatInterface
-          model={selectedModel}
-          models={models}
-          onModelChange={handleModelChange}
-        />
-      )}
+        {!loading && !error && (
+          <ChatInterface
+            model={selectedModel}
+            models={models}
+            onModelChange={handleModelChange}
+            activeConversation={activeConversation}
+            onMessagesChange={saveMessages}
+          />
+        )}
+      </div>
     </div>
   );
 }
