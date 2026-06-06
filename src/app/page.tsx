@@ -36,8 +36,13 @@ export default function Home() {
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="border-b px-4 py-3 shrink-0">
+      <header className="border-b px-4 py-3 shrink-0 flex items-center justify-between">
         <h1 className="text-sm font-semibold">FreePT</h1>
+        {selectedModel && models.length > 0 && (
+          <span className="text-xs text-muted-foreground truncate max-w-[50%] text-right">
+            {models.find((m) => m.id === selectedModel)?.name ?? selectedModel}
+          </span>
+        )}
       </header>
 
       {loading && (

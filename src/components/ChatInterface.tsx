@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { ArrowUp } from "lucide-react";
+import { Loader } from "@/components/ui/loader";
+import { ScrollButton } from "@/components/ui/scroll-button";
 import { ChatMessage, Model } from "@/lib/types";
 
 type Props = {
@@ -83,13 +85,14 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
       }
     } catch (e) {
       console.error("chat stream error", e);
+      const msg = e instanceof Error ? e.message : "Failed to get response";
       setMessages((prev) => {
         const updated = [...prev];
         const last = updated[updated.length - 1];
         if (last.role === "assistant") {
-          updated[updated.length - 1] = { ...last, content: "Error: failed to get response" };
+          updated[updated.length - 1] = { ...last, content: msg, isError: true };
         } else {
-          updated.push({ role: "assistant", content: "Error: failed to get response" });
+          updated.push({ role: "assistant", content: msg, isError: true });
         }
         return updated;
       });
@@ -101,34 +104,54 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Thread */}
-      <ChatContainerRoot className="flex-1">
-        <ChatContainerContent className="py-6 px-4 max-w-3xl mx-auto w-full space-y-4">
-          {messages.length === 0 ? (
-            <div className="flex min-h-[60vh] items-center justify-center">
-              <p className="text-muted-foreground text-xl">Hey there</p>
-            </div>
-          ) : (
-            messages.map((msg, i) => (
-              <Message
-                key={i}
-                className={msg.role === "user" ? "justify-end" : "justify-start"}
-              >
-                <MessageContent
-                  markdown={msg.role === "assistant"}
-                  className={
-                    msg.role === "user"
-                      ? "bg-muted rounded-3xl px-5 py-2.5 max-w-[80%]"
-                      : "bg-transparent p-0 max-w-full"
-                  }
+      <div className="relative flex-1 min-h-0">
+        <ChatContainerRoot className="h-full">
+          <ChatContainerContent className="py-6 px-4 max-w-3xl mx-auto w-full space-y-4">
+            {messages.length === 0 ? (
+              <div className="flex min-h-[60vh] flex-col items-center justify-center gap-2">
+                <p className="text-2xl font-semibold">What can I help with?</p>
+                <p className="text-muted-foreground text-sm">Powered by free models via OpenRouter</p>
+              </div>
+            ) : (
+              messages.map((msg, i) => (
+                <Message
+                  key={i}
+                  className={msg.role === "user" ? "justify-end" : "justify-start"}
                 >
-                  {msg.content}
-                </MessageContent>
+                  {isStreaming && i === messages.length - 1 && msg.role === "assistant" && msg.content === "" ? (
+                    <Loader variant="typing" size="sm" className="mt-1 ml-1" />
+                  ) : (
+                    <MessageContent
+                      markdown={msg.role === "assistant" && !msg.isError}
+                      className={
+                        msg.isError
+                          ? "text-destructive bg-destructive/10 rounded-xl px-4 py-2.5 max-w-[80%] text-sm"
+                          : msg.role === "user"
+                          ? "bg-muted rounded-3xl px-5 py-2.5 max-w-[80%]"
+                          : "bg-transparent p-0 max-w-full"
+                      }
+                    >
+                      {msg.content}
+                    </MessageContent>
+                  )}
+                </Message>
+              ))
+            )}
+            {/* Pending indicator: request in-flight but no assistant message yet */}
+            {isStreaming && messages[messages.length - 1]?.role === "user" && (
+              <Message className="justify-start">
+                <Loader variant="typing" size="sm" className="mt-1 ml-1" />
               </Message>
-            ))
-          )}
-          <ChatContainerScrollAnchor />
-        </ChatContainerContent>
-      </ChatContainerRoot>
+            )}
+            <ChatContainerScrollAnchor />
+          </ChatContainerContent>
+          <div className="pointer-events-none absolute bottom-4 left-0 right-0 flex justify-center">
+            <div className="pointer-events-auto">
+              <ScrollButton />
+            </div>
+          </div>
+        </ChatContainerRoot>
+      </div>
 
       {/* Input */}
       <div className="border-t p-4 shrink-0">
