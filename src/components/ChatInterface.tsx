@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ChatContainerContent,
   ChatContainerRoot,
@@ -43,10 +43,12 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const submittingRef = useRef(false);
 
   async function handleSubmit() {
     const trimmed = input.trim();
-    if (!trimmed || isStreaming) return;
+    if (!trimmed || submittingRef.current) return;
+    submittingRef.current = true;
 
     const userMsg: ChatMessage = { role: "user", content: trimmed };
     const history = [...messages, userMsg];
@@ -54,11 +56,16 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
     setInput("");
     setIsStreaming(true);
 
+    // Strip error messages and non-standard fields before sending to API
+    const apiMessages = history
+      .filter((m) => !m.isError)
+      .map(({ role, content }) => ({ role, content }));
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, model }), // history excludes the assistant placeholder intentionally
+        body: JSON.stringify({ messages: apiMessages, model }),
       });
 
       if (!res.ok || !res.body) throw new Error("Request failed");
@@ -83,6 +90,17 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
           return updated;
         });
       }
+
+      // Flush any buffered multi-byte characters (e.g. emoji, CJK) from the decoder
+      const trailing = decoder.decode();
+      if (trailing) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          updated[updated.length - 1] = { ...last, content: last.content + trailing };
+          return updated;
+        });
+      }
     } catch (e) {
       console.error("chat stream error", e);
       const msg = e instanceof Error ? e.message : "Failed to get response";
@@ -97,6 +115,7 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
         return updated;
       });
     } finally {
+      submittingRef.current = false;
       setIsStreaming(false);
     }
   }
