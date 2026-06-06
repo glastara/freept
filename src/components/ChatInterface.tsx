@@ -161,7 +161,6 @@ export function ChatInterface({
             {messages.length === 0 ? (
               <div className="flex min-h-[60vh] flex-col items-center justify-center gap-2">
                 <p className="text-2xl font-semibold">Ask anything. It's on the house.</p>
-                <p className="text-muted-foreground text-sm">Powered by free models via OpenRouter</p>
               </div>
             ) : (
               messages.map((msg, i) => (
