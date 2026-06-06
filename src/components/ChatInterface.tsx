@@ -85,10 +85,12 @@ export function ChatInterface({ model, models, onModelChange }: Props) {
       console.error("chat stream error", e);
       setMessages((prev) => {
         const updated = [...prev];
-        updated[updated.length - 1] = {
-          ...updated[updated.length - 1],
-          content: "Error: failed to get response",
-        };
+        const last = updated[updated.length - 1];
+        if (last.role === "assistant") {
+          updated[updated.length - 1] = { ...last, content: "Error: failed to get response" };
+        } else {
+          updated.push({ role: "assistant", content: "Error: failed to get response" });
+        }
         return updated;
       });
     } finally {
