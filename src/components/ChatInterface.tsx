@@ -156,13 +156,14 @@ export function ChatInterface({
     <div className="flex flex-col flex-1 min-h-0">
       {/* Thread */}
       <div className="relative flex-1 min-h-0">
+        {messages.length === 0 && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <p className="text-2xl font-semibold">Ask anything. It&apos;s on the house.</p>
+          </div>
+        )}
         <ChatContainerRoot className="h-full">
           <ChatContainerContent className="py-6 px-4 max-w-3xl mx-auto w-full space-y-4">
-            {messages.length === 0 ? (
-              <div className="flex min-h-[60vh] flex-col items-center justify-center gap-2">
-                <p className="text-2xl font-semibold">Ask anything. It's on the house.</p>
-              </div>
-            ) : (
+            {messages.length > 0 && (
               messages.map((msg, i) => (
                 <Message
                   key={i}

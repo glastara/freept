@@ -25,7 +25,9 @@ export function Sidebar({
     <aside className="flex flex-col w-64 shrink-0 border-r h-full bg-muted/30">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 shrink-0 border-b">
-        <span className="text-sm font-semibold">FreePT</span>
+        <span className="text-base font-bold tracking-tight">
+          <span className="text-primary">Free</span>PT
+        </span>
         <Button
           variant="ghost"
           size="icon"
