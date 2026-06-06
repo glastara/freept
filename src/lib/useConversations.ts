@@ -29,6 +29,7 @@ export function useConversations() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [chatKey, setChatKey] = useState(0);
   const activeIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export function useConversations() {
     setActiveId(null);
     activeIdRef.current = null;
     localStorage.removeItem(ACTIVE_ID_KEY);
+    setChatKey((k) => k + 1);
   }, []);
 
   const selectConversation = useCallback((id: string) => {
@@ -103,6 +105,7 @@ export function useConversations() {
     conversations: filteredConversations,
     activeConversation,
     activeId,
+    chatKey,
     searchQuery,
     setSearchQuery,
     newChat,

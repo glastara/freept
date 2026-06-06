@@ -18,6 +18,7 @@ export default function Home() {
     conversations,
     activeConversation,
     activeId,
+    chatKey,
     searchQuery,
     setSearchQuery,
     newChat,
@@ -73,6 +74,7 @@ export default function Home() {
 
         {!loading && !error && (
           <ChatInterface
+            key={chatKey}
             model={selectedModel}
             models={models}
             onModelChange={handleModelChange}
