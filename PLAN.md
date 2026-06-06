@@ -88,7 +88,7 @@ Goal today: a working chat app with a model selector, deployed to Vercel.
 ## Stretch (only if ahead of schedule)
 
 - Conversation history in `localStorage`.
-- Live websearch tool (free).
+- Live websearch button (either use model if it has websearch built-in or use a free websearch API).
 - Copy-message button (prompt-kit supports it).
 - Stop-generation button (abort the fetch / reader).
 - /new slash command shortcut to create new conversation after saving last one
