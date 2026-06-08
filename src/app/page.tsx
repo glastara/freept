@@ -27,7 +27,7 @@ export default function Home() {
   } = useConversations();
 
   useEffect(() => {
-    fetch("/api/models")
+    fetch("/api/models", { signal: AbortSignal.timeout(15_000) })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load models");
         return res.json();

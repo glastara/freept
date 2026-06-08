@@ -2,7 +2,6 @@ import { cn } from "@/lib/utils"
 import { marked } from "marked"
 import { memo, useId, useMemo } from "react"
 import ReactMarkdown, { Components } from "react-markdown"
-import rehypeRaw from "rehype-raw"
 import remarkBreaks from "remark-breaks"
 import remarkGfm from "remark-gfm"
 import { CodeBlock, CodeBlockCode } from "./code-block"
@@ -69,7 +68,7 @@ const MemoizedMarkdownBlock = memo(
     return (
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[rehypeRaw]}
+
         components={components}
       >
         {content}

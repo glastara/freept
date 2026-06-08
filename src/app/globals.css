@@ -130,3 +130,8 @@
     @apply font-sans;
   }
 }
+
+/* Bridge base-ui's collapsible height variable to the name tw-animate-css keyframes expect */
+[data-slot="collapsible-content"] {
+  --radix-collapsible-content-height: var(--collapsible-panel-height);
+}

@@ -1,12 +1,21 @@
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  const res = await fetch("https://openrouter.ai/api/v1/models", {
-    headers: {
-      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-    },
-    next: { revalidate: 3600 }, // re-fetch at most once per hour
-  });
+  let res: Response;
+  try {
+    res = await fetch("https://openrouter.ai/api/v1/models", {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      },
+      signal: AbortSignal.timeout(10_000),
+      next: { revalidate: 3600 }, // re-fetch at most once per hour
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Could not reach OpenRouter" },
+      { status: 502 }
+    );
+  }
 
   if (!res.ok) {
     return NextResponse.json(
@@ -28,6 +37,9 @@ export async function GET() {
       name: m.name ?? m.id,
       context_length: m.context_length ?? null,
       description: m.description ?? "",
+      supportsWebSearch:
+        Array.isArray(m.supported_parameters) &&
+        m.supported_parameters.includes("tools"),
     }));
 
   return NextResponse.json(freeModels);

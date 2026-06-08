@@ -60,30 +60,35 @@ export function useConversations() {
   const saveMessages = useCallback((messages: ChatMessage[], conversationId?: string) => {
     const targetId = conversationId ?? activeIdRef.current;
 
+    // For a brand-new conversation, assign the ID synchronously before scheduling
+    // the state update. React's updater runs asynchronously (MessageChannel macrotask),
+    // so any saveMessages call that arrives after an `await` would see activeIdRef
+    // as still null if we only set it inside the updater — causing a duplicate entry.
+    const resolvedId = targetId ?? crypto.randomUUID();
+    if (!targetId) {
+      activeIdRef.current = resolvedId;
+      setActiveId(resolvedId);
+      localStorage.setItem(ACTIVE_ID_KEY, resolvedId);
+    }
+
     setConversations((prev) => {
-      const existing = targetId ? prev.find((c) => c.id === targetId) : null;
+      const existing = prev.find((c) => c.id === resolvedId);
       let updated: Conversation[];
 
       if (existing) {
         updated = prev.map((c) =>
-          c.id === targetId
+          c.id === resolvedId
             ? { ...c, messages, title: makeTitle(messages), updatedAt: Date.now() }
             : c
         );
       } else {
         const newConvo: Conversation = {
-          id: targetId ?? crypto.randomUUID(),
+          id: resolvedId,
           title: makeTitle(messages),
           messages,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
-        // If no id was set yet, record it now
-        if (!targetId) {
-          setActiveId(newConvo.id);
-          activeIdRef.current = newConvo.id;
-          localStorage.setItem(ACTIVE_ID_KEY, newConvo.id);
-        }
         updated = [newConvo, ...prev];
       }
 
