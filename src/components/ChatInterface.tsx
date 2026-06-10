@@ -24,7 +24,8 @@ import { ArrowUp, Globe } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { ScrollButton } from "@/components/ui/scroll-button";
 import { Tool } from "@/components/ui/tool";
-import { ChatMessage, Conversation, Model, ToolState } from "@/lib/types";
+import { ChatMessage, Conversation, Model, ToolState, UrlSource } from "@/lib/types";
+import { Source, SourceContent, SourceTrigger } from "@/components/ui/source";
 
 type Props = {
   model: string;
@@ -129,12 +130,14 @@ export function ChatInterface({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
 
-      // We expect exactly 2 tool-header lines before text when webSearch is on:
+      // Header protocol for web search:
       //   {"__tool":"input-streaming"}\n  — sent immediately
-      //   {"__tool":"output-available"|"output-error",...}\n  — sent after plugin resolves
-      // Everything after those two lines is model text.
+      //   {"__tool":"output-available"|"output-error"}\n  — when search finishes
+      //   {"__sources":[...]}\n  — optional, immediately after output-available
+      // We consume lines as headers until we hit a line that is not a recognised
+      // JSON header (or JSON.parse fails), at which point content begins.
       let lineBuffer = "";
-      let headersRemaining = useWebSearch ? 2 : 0;
+      let parsingHeaders = useWebSearch;
 
       const appendText = (text: string) => {
         if (!text) return;
@@ -153,43 +156,55 @@ export function ChatInterface({
         commitMessages(updated);
       };
 
+      const applySources = (sources: UrlSource[]) => {
+        const cur = messagesRef.current;
+        const updated = [...cur];
+        const last = updated[updated.length - 1];
+        updated[updated.length - 1] = { ...last, sources };
+        commitMessages(updated);
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
 
-        if (headersRemaining === 0) {
+        if (!parsingHeaders) {
           appendText(chunk);
           continue;
         }
 
-        // Still parsing header lines — accumulate into lineBuffer and process
-        // complete lines one at a time.
+        // Still in header-parsing mode: accumulate and process complete lines.
         lineBuffer += chunk;
 
-        while (lineBuffer.includes("\n") && headersRemaining > 0) {
+        while (lineBuffer.includes("\n")) {
           const nl = lineBuffer.indexOf("\n");
           const line = lineBuffer.slice(0, nl);
           lineBuffer = lineBuffer.slice(nl + 1);
 
+          let isHeader = false;
           try {
             const parsed = JSON.parse(line);
             if (parsed.__tool) {
               applyToolState(parsed.__tool as ToolState, parsed.error);
-              headersRemaining--;
-              continue;
+              isHeader = true;
+            } else if (parsed.__sources) {
+              applySources(parsed.__sources as UrlSource[]);
+              isHeader = true;
             }
           } catch { /* not a header line */ }
 
-          // Non-header line — treat as the start of the text response
-          appendText(line + "\n" + lineBuffer);
-          lineBuffer = "";
-          headersRemaining = 0;
-          break;
+          if (!isHeader) {
+            // Content starts here — flush this line and remainder as text.
+            parsingHeaders = false;
+            appendText(line + (lineBuffer ? "\n" + lineBuffer : ""));
+            lineBuffer = "";
+            break;
+          }
         }
 
-        // All headers consumed — flush any partial text already in lineBuffer
-        if (headersRemaining === 0 && lineBuffer) {
+        // Headers done — flush any partial text already buffered.
+        if (!parsingHeaders && lineBuffer) {
           appendText(lineBuffer);
           lineBuffer = "";
         }
@@ -253,6 +268,16 @@ export function ChatInterface({
                             ...(msg.toolError ? { errorText: msg.toolError } : {}),
                           }}
                         />
+                      )}
+                      {msg.sources && msg.sources.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-2 mb-1">
+                          {msg.sources.map((src, si) => (
+                            <Source key={si} href={src.url}>
+                              <SourceTrigger label={si + 1} showFavicon />
+                              <SourceContent title={src.title} description={src.url} />
+                            </Source>
+                          ))}
+                        </div>
                       )}
                       {(msg.content || (!isStreaming || i < messages.length - 1)) && (
                         <MessageContent

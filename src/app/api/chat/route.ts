@@ -8,11 +8,17 @@ const client = new OpenAI({
 
 const encoder = new TextEncoder();
 
+type UrlSource = { url: string; title: string };
+
 function toolLine(state: string, error?: string): Uint8Array {
   const payload = error
     ? JSON.stringify({ __tool: state, error })
     : JSON.stringify({ __tool: state });
   return encoder.encode(payload + "\n");
+}
+
+function sourcesLine(sources: UrlSource[]): Uint8Array {
+  return encoder.encode(JSON.stringify({ __sources: sources }) + "\n");
 }
 
 async function streamPlain(
@@ -28,6 +34,51 @@ async function streamPlain(
   }
 }
 
+// Strips <longcat_tool_call>...</longcat_tool_call> blocks that some OpenRouter
+// models emit inline in their content stream when invoking the web search plugin.
+// Works across chunk boundaries by buffering a small tail.
+class ToolCallFilter {
+  private buffer = "";
+  private inside = false;
+  private static readonly OPEN = "<longcat_tool_call>";
+  private static readonly CLOSE = "</longcat_tool_call>";
+
+  feed(text: string): string {
+    this.buffer += text;
+    let out = "";
+    while (true) {
+      if (!this.inside) {
+        const i = this.buffer.indexOf(ToolCallFilter.OPEN);
+        if (i === -1) {
+          const safe = Math.max(0, this.buffer.length - (ToolCallFilter.OPEN.length - 1));
+          out += this.buffer.slice(0, safe);
+          this.buffer = this.buffer.slice(safe);
+          break;
+        }
+        out += this.buffer.slice(0, i);
+        this.buffer = this.buffer.slice(i);
+        this.inside = true;
+      } else {
+        const i = this.buffer.indexOf(ToolCallFilter.CLOSE);
+        if (i === -1) {
+          this.buffer = this.buffer.slice(Math.max(0, this.buffer.length - (ToolCallFilter.CLOSE.length - 1)));
+          break;
+        }
+        this.buffer = this.buffer.slice(i + ToolCallFilter.CLOSE.length);
+        this.inside = false;
+      }
+    }
+    return out;
+  }
+
+  flush(): string {
+    if (this.inside) return "";
+    const r = this.buffer;
+    this.buffer = "";
+    return r;
+  }
+}
+
 async function streamWithWebSearch(
   model: string,
   messages: object[],
@@ -39,19 +90,47 @@ async function streamWithWebSearch(
     tools: [{ type: "openrouter:web_search" }],
   } as unknown as Parameters<typeof client.chat.completions.create>[0] & { stream: true });
 
-  // Emit output-available on the first content token — that's when the web
-  // search phase ends and the model starts responding. The client expects this
-  // header BEFORE any text, so it must be sent here, not after the loop.
+  // Collect source annotations from pre-content chunks. On the first raw content
+  // token, emit output-available (compact, unchanged size) then a __sources line
+  // so the client never has to parse a variably-sized JSON header mid-stream.
+  const sources: UrlSource[] = [];
+  const filter = new ToolCallFilter();
   let headerSent = false;
+
   for await (const chunk of stream) {
-    const text = chunk.choices[0]?.delta?.content ?? "";
-    if (text && !headerSent) {
+    const delta = chunk.choices[0]?.delta as Record<string, unknown> | undefined;
+    const raw = (delta?.content as string | null) ?? "";
+
+    if (!headerSent) {
+      const annotations = delta?.annotations as Array<{ type: string; url_citation?: { url: string; title: string } }> | undefined;
+      if (annotations) {
+        for (const a of annotations) {
+          if (a.type === "url_citation" && a.url_citation?.url) {
+            sources.push({ url: a.url_citation.url, title: a.url_citation.title ?? a.url_citation.url });
+          }
+        }
+      }
+    }
+
+    // Use `raw` (not filtered output) to detect the first content token —
+    // the filter's partial-tag guard can delay output and must not postpone headers.
+    if (raw && !headerSent) {
       controller.enqueue(toolLine("output-available"));
+      if (sources.length) controller.enqueue(sourcesLine(sources));
       headerSent = true;
     }
+
+    const text = filter.feed(raw);
     if (text) controller.enqueue(encoder.encode(text));
   }
-  if (!headerSent) controller.enqueue(toolLine("output-available"));
+
+  const tail = filter.flush();
+  if (tail) controller.enqueue(encoder.encode(tail));
+
+  if (!headerSent) {
+    controller.enqueue(toolLine("output-available"));
+    if (sources.length) controller.enqueue(sourcesLine(sources));
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -69,9 +148,6 @@ export async function POST(req: NextRequest) {
         return;
       }
 
-      // Web search: input-streaming first, then output-available is emitted
-      // inside streamWithWebSearch right before text starts, so the client's
-      // two-header protocol is satisfied before any content arrives.
       controller.enqueue(toolLine("input-streaming"));
 
       try {

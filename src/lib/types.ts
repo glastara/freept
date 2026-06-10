@@ -8,12 +8,18 @@ export interface Model {
 
 export type ToolState = "input-streaming" | "output-available" | "output-error";
 
+export interface UrlSource {
+  url: string;
+  title: string;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   isError?: boolean;
   toolState?: ToolState;
   toolError?: string;
+  sources?: UrlSource[];
 }
 
 export interface Conversation {
