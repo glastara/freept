@@ -16,12 +16,26 @@ function load(): Conversation[] {
 }
 
 function save(convos: Conversation[]) {
-  localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(convos));
+  try {
+    localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(convos));
+  } catch (e) {
+    // Quota exceeded (large image attachments) — retry without attachment data
+    // so the conversation text is still persisted.
+    try {
+      const slim = convos.map((c) => ({
+        ...c,
+        messages: c.messages.map((m) => ({ ...m, attachments: undefined })),
+      }));
+      localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(slim));
+    } catch {
+      console.error("Failed to persist conversations", e);
+    }
+  }
 }
 
 function makeTitle(messages: ChatMessage[]): string {
   const first = messages.find((m) => m.role === "user");
-  const text = first?.content ?? "New chat";
+  const text = first?.content || first?.attachments?.[0]?.name || "New chat";
   return text.length > 40 ? text.slice(0, 40).trimEnd() + "…" : text;
 }
 

@@ -40,6 +40,9 @@ export async function GET() {
       supportsWebSearch:
         Array.isArray(m.supported_parameters) &&
         m.supported_parameters.includes("tools"),
+      supportsImages:
+        Array.isArray(m.architecture?.input_modalities) &&
+        m.architecture.input_modalities.includes("image"),
     }));
 
   return NextResponse.json(freeModels);

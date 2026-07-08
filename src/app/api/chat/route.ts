@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 
 const client = new OpenAI({
@@ -21,17 +21,47 @@ function sourcesLine(sources: UrlSource[]): Uint8Array {
   return encoder.encode(JSON.stringify({ __sources: sources }) + "\n");
 }
 
+function upstreamErrorMessage(e: unknown): { message: string; status: number } {
+  if (e instanceof OpenAI.APIError) {
+    return { message: e.message, status: typeof e.status === "number" ? e.status : 502 };
+  }
+  return { message: e instanceof Error ? e.message : "Upstream request failed", status: 502 };
+}
+
+// OpenRouter parses PDF file parts via its file-parser plugin; "pdf-text" is
+// the free engine. Only attach the plugin when a file part is actually present.
+function pdfPlugins(messages: object[]) {
+  const hasFile = messages.some(
+    (m) =>
+      Array.isArray((m as { content?: unknown }).content) &&
+      ((m as { content: Array<{ type?: string }> }).content).some((p) => p?.type === "file"),
+  );
+  return hasFile ? { plugins: [{ id: "file-parser", pdf: { engine: "pdf-text" } }] } : {};
+}
+
+async function createPlainStream(model: string, messages: object[]) {
+  const msgs = messages as Parameters<typeof client.chat.completions.create>[0]["messages"];
+  return client.chat.completions.create({
+    model, messages: msgs, stream: true, ...pdfPlugins(messages),
+  } as unknown as Parameters<typeof client.chat.completions.create>[0] & { stream: true });
+}
+
+async function pumpPlain(
+  stream: Awaited<ReturnType<typeof createPlainStream>>,
+  controller: ReadableStreamDefaultController,
+) {
+  for await (const chunk of stream) {
+    const text = chunk.choices[0]?.delta?.content ?? "";
+    if (text) controller.enqueue(encoder.encode(text));
+  }
+}
+
 async function streamPlain(
   model: string,
   messages: object[],
   controller: ReadableStreamDefaultController,
 ) {
-  const msgs = messages as Parameters<typeof client.chat.completions.create>[0]["messages"];
-  const stream = await client.chat.completions.create({ model, messages: msgs, stream: true });
-  for await (const chunk of stream) {
-    const text = chunk.choices[0]?.delta?.content ?? "";
-    if (text) controller.enqueue(encoder.encode(text));
-  }
+  await pumpPlain(await createPlainStream(model, messages), controller);
 }
 
 // Strips <longcat_tool_call>...</longcat_tool_call> blocks that some OpenRouter
@@ -140,14 +170,37 @@ export async function POST(req: NextRequest) {
     return new Response("Missing model", { status: 400 });
   }
 
+  if (!webSearch) {
+    // Open the upstream stream before responding so upstream failures (e.g. a
+    // listed model the provider refuses to serve) surface as a real error
+    // response instead of a dead 500 stream.
+    let upstream: Awaited<ReturnType<typeof createPlainStream>>;
+    try {
+      upstream = await createPlainStream(model, messages);
+    } catch (e) {
+      const { message, status } = upstreamErrorMessage(e);
+      return NextResponse.json({ error: message }, { status });
+    }
+
+    const readable = new ReadableStream({
+      async start(controller) {
+        try {
+          await pumpPlain(upstream, controller);
+        } catch (e) {
+          const { message } = upstreamErrorMessage(e);
+          controller.enqueue(encoder.encode(`\n\n[Stream interrupted: ${message}]`));
+        }
+        controller.close();
+      },
+    });
+
+    return new Response(readable, {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+
   const readable = new ReadableStream({
     async start(controller) {
-      if (!webSearch) {
-        await streamPlain(model, messages, controller);
-        controller.close();
-        return;
-      }
-
       controller.enqueue(toolLine("input-streaming"));
 
       try {

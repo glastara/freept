@@ -20,11 +20,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, Globe } from "lucide-react";
+import { ArrowUp, FileText, Globe, ImageIcon, Paperclip, X } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { ScrollButton } from "@/components/ui/scroll-button";
 import { Tool } from "@/components/ui/tool";
-import { ChatMessage, Conversation, Model, ToolState, UrlSource } from "@/lib/types";
+import {
+  FileUpload,
+  FileUploadContent,
+  FileUploadTrigger,
+} from "@/components/ui/file-upload";
+import { Attachment, ChatMessage, Conversation, Model, ToolState, UrlSource } from "@/lib/types";
 import { Source, SourceContent, SourceTrigger } from "@/components/ui/source";
 
 type Props = {
@@ -41,6 +46,51 @@ function handleModelChange(
   return (value) => {
     if (value !== null) onModelChange(value);
   };
+}
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // per file
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+// Convert a message with attachments into OpenAI-style multimodal content parts.
+function toApiContent(msg: ChatMessage): string | object[] {
+  if (!msg.attachments?.length) return msg.content;
+  const parts: object[] = [];
+  if (msg.content) parts.push({ type: "text", text: msg.content });
+  for (const a of msg.attachments) {
+    if (a.mediaType.startsWith("image/")) {
+      parts.push({ type: "image_url", image_url: { url: a.dataUrl } });
+    } else {
+      parts.push({ type: "file", file: { filename: a.name, file_data: a.dataUrl } });
+    }
+  }
+  return parts;
+}
+
+function AttachmentPreview({ attachment }: { attachment: Attachment }) {
+  if (attachment.mediaType.startsWith("image/")) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={attachment.dataUrl}
+        alt={attachment.name}
+        className="max-h-64 max-w-[240px] rounded-2xl object-cover"
+      />
+    );
+  }
+  return (
+    <div className="flex items-center gap-2 rounded-xl bg-muted px-3 py-2 text-sm">
+      <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="max-w-[200px] truncate">{attachment.name}</span>
+    </div>
+  );
 }
 
 
@@ -70,10 +120,38 @@ export function ChatInterface({
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const submittingRef = useRef(false);
 
   const activeModel = models.find((m) => m.id === model);
   const supportsWebSearch = activeModel?.supportsWebSearch ?? false;
+  const supportsImages = activeModel?.supportsImages ?? false;
+
+  const acceptTypes = supportsImages ? "image/*,application/pdf" : "application/pdf";
+
+  async function handleFilesAdded(files: File[]) {
+    const usable = files.filter((f) => {
+      if (f.size > MAX_ATTACHMENT_BYTES) {
+        console.warn(`Skipping ${f.name}: larger than 10MB`);
+        return false;
+      }
+      if (f.type.startsWith("image/")) return supportsImages;
+      return f.type === "application/pdf";
+    });
+    if (!usable.length) return;
+    const loaded = await Promise.all(
+      usable.map(async (f) => ({
+        name: f.name,
+        mediaType: f.type,
+        dataUrl: await readFileAsDataUrl(f),
+      }))
+    );
+    setAttachments((prev) => [...prev, ...loaded]);
+  }
+
+  function removeAttachment(index: number) {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  }
 
   // Sync messages when the active conversation changes
   useEffect(() => {
@@ -90,20 +168,25 @@ export function ChatInterface({
 
   async function handleSubmit() {
     const trimmed = input.trim();
-    if (!trimmed || submittingRef.current) return;
+    if ((!trimmed && attachments.length === 0) || submittingRef.current) return;
     submittingRef.current = true;
 
     streamingConvoIdRef.current = activeConversation?.id;
 
-    const userMsg: ChatMessage = { role: "user", content: trimmed };
+    const userMsg: ChatMessage = {
+      role: "user",
+      content: trimmed,
+      ...(attachments.length ? { attachments } : {}),
+    };
     const history = [...messagesRef.current, userMsg];
     commitMessages(history, true); // save: creates/updates conversation entry
     setInput("");
+    setAttachments([]);
     setIsStreaming(true);
 
     const apiMessages = history
       .filter((m) => !m.isError)
-      .map(({ role, content }) => ({ role, content }));
+      .map((m) => ({ role: m.role, content: toApiContent(m) }));
 
     const useWebSearch = webSearchEnabled && supportsWebSearch;
 
@@ -114,7 +197,14 @@ export function ChatInterface({
         body: JSON.stringify({ messages: apiMessages, model, webSearch: useWebSearch }),
       });
 
-      if (!res.ok || !res.body) throw new Error("Request failed");
+      if (!res.ok || !res.body) {
+        let msg = "Request failed";
+        try {
+          const data = await res.json();
+          if (typeof data?.error === "string") msg = data.error;
+        } catch { /* non-JSON error body */ }
+        throw new Error(msg);
+      }
 
       // Add the assistant placeholder immediately
       const withPlaceholder: ChatMessage[] = [
@@ -259,7 +349,20 @@ export function ChatInterface({
                   {isStreaming && i === messages.length - 1 && msg.role === "assistant" && msg.content === "" && !msg.toolState ? (
                     <Loader variant="typing" size="sm" className="mt-1 ml-1" />
                   ) : (
-                    <div className={msg.role === "assistant" ? "w-full" : undefined}>
+                    <div
+                      className={
+                        msg.role === "assistant"
+                          ? "w-full"
+                          : "flex max-w-[80%] min-w-0 flex-col items-end gap-2"
+                      }
+                    >
+                      {msg.attachments && msg.attachments.length > 0 && (
+                        <div className="flex flex-wrap justify-end gap-2">
+                          {msg.attachments.map((a, ai) => (
+                            <AttachmentPreview key={ai} attachment={a} />
+                          ))}
+                        </div>
+                      )}
                       {msg.toolState && (
                         <Tool
                           toolPart={{
@@ -279,14 +382,16 @@ export function ChatInterface({
                           ))}
                         </div>
                       )}
-                      {(msg.content || (!isStreaming || i < messages.length - 1)) && (
+                      {(msg.content ||
+                        (msg.role === "assistant" &&
+                          (!isStreaming || i < messages.length - 1))) && (
                         <MessageContent
                           markdown={msg.role === "assistant" && !msg.isError}
                           className={
                             msg.isError
                               ? "text-destructive bg-destructive/10 rounded-xl px-4 py-2.5 max-w-[80%] text-sm"
                               : msg.role === "user"
-                              ? "bg-muted rounded-3xl px-5 py-2.5 max-w-[80%]"
+                              ? "bg-muted rounded-3xl px-5 py-2.5"
                               : "bg-transparent p-0 max-w-full"
                           }
                         >
@@ -315,12 +420,49 @@ export function ChatInterface({
       {/* Input */}
       <div className="border-t p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
+          <FileUpload
+            onFilesAdded={handleFilesAdded}
+            accept={acceptTypes}
+            disabled={isStreaming}
+          >
           <PromptInput
             value={input}
             onValueChange={setInput}
             onSubmit={handleSubmit}
             disabled={isStreaming}
           >
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-2 pt-1 pb-2">
+                {attachments.map((a, i) => (
+                  <div key={i} className="relative">
+                    {a.mediaType.startsWith("image/") ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={a.dataUrl}
+                        alt={a.name}
+                        className="h-16 w-16 rounded-xl object-cover"
+                      />
+                    ) : (
+                      <div className="flex items-center gap-2 rounded-xl bg-muted px-3 py-2 text-sm">
+                        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="max-w-[160px] truncate">{a.name}</span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${a.name}`}
+                      className="absolute -top-1.5 -right-1.5 rounded-full bg-foreground p-0.5 text-background shadow"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeAttachment(i);
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <PromptInputTextarea placeholder="How can I help you today?" />
             <PromptInputActions className="justify-between pt-1">
               <Select value={model} onValueChange={handleModelChange(onModelChange)}>
@@ -337,6 +479,23 @@ export function ChatInterface({
               </Select>
 
               <div className="flex items-center gap-1">
+                <FileUploadTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+                    disabled={isStreaming}
+                    title={
+                      supportsImages
+                        ? "Attach images or PDFs"
+                        : "Attach PDFs (this model does not accept images)"
+                    }
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </Button>
+                </FileUploadTrigger>
+
                 <Button
                   type="button"
                   variant="ghost"
@@ -366,13 +525,26 @@ export function ChatInterface({
                   size="icon"
                   className="h-8 w-8 rounded-full"
                   onClick={handleSubmit}
-                  disabled={isStreaming || !input.trim()}
+                  disabled={isStreaming || (!input.trim() && attachments.length === 0)}
                 >
                   <ArrowUp className="h-4 w-4" />
                 </Button>
               </div>
             </PromptInputActions>
           </PromptInput>
+
+          <FileUploadContent>
+            <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed bg-background/95 px-14 py-10 shadow-lg">
+              <ImageIcon className="h-8 w-8 text-muted-foreground" />
+              <p className="font-medium">Drop files to attach</p>
+              <p className="text-sm text-muted-foreground">
+                {supportsImages
+                  ? "Images and PDFs are supported"
+                  : "PDFs only — this model does not accept images"}
+              </p>
+            </div>
+          </FileUploadContent>
+          </FileUpload>
         </div>
       </div>
     </div>
