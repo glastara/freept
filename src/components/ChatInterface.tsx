@@ -6,7 +6,12 @@ import {
   ChatContainerRoot,
   ChatContainerScrollAnchor,
 } from "@/components/ui/chat-container";
-import { Message, MessageContent } from "@/components/ui/message";
+import {
+  Message,
+  MessageAction,
+  MessageActions,
+  MessageContent,
+} from "@/components/ui/message";
 import {
   PromptInput,
   PromptInputActions,
@@ -20,7 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, FileText, Globe, ImageIcon, Paperclip, X } from "lucide-react";
+import { ArrowUp, Check, Copy, FileText, Globe, ImageIcon, Paperclip, X } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { ScrollButton } from "@/components/ui/scroll-button";
 import { Tool } from "@/components/ui/tool";
@@ -85,6 +90,35 @@ function AttachmentPreview({ attachment }: { attachment: Attachment }) {
   );
 }
 
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  return (
+    <MessageAction tooltip={copied ? "Copied!" : "Copy"}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Copy message"
+        className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+        onClick={handleCopy}
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </Button>
+    </MessageAction>
+  );
+}
 
 export function ChatInterface({
   model,
@@ -387,6 +421,17 @@ export function ChatInterface({
                           {msg.content}
                         </MessageContent>
                       )}
+                      {msg.content &&
+                        !msg.isError &&
+                        !(isStreaming && i === messages.length - 1) && (
+                          <MessageActions
+                            className={
+                              msg.role === "user" ? "justify-end" : "justify-start -ml-1"
+                            }
+                          >
+                            <CopyButton text={msg.content} />
+                          </MessageActions>
+                        )}
                     </div>
                   )}
                 </Message>
