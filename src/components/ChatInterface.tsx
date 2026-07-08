@@ -30,6 +30,7 @@ import {
   FileUploadTrigger,
 } from "@/components/ui/file-upload";
 import { Attachment, ChatMessage, Conversation, Model, ToolState, UrlSource } from "@/lib/types";
+import { acceptForModel, processFile } from "@/lib/attachments";
 import { Source, SourceContent, SourceTrigger } from "@/components/ui/source";
 
 type Props = {
@@ -48,26 +49,17 @@ function handleModelChange(
   };
 }
 
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // per file
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
 // Convert a message with attachments into OpenAI-style multimodal content parts.
 function toApiContent(msg: ChatMessage): string | object[] {
   if (!msg.attachments?.length) return msg.content;
   const parts: object[] = [];
   if (msg.content) parts.push({ type: "text", text: msg.content });
   for (const a of msg.attachments) {
-    if (a.mediaType.startsWith("image/")) {
+    if (a.text != null) {
+      parts.push({ type: "text", text: `\n\n[Attached file: ${a.name}]\n${a.text}` });
+    } else if (a.mediaType.startsWith("image/") && a.dataUrl) {
       parts.push({ type: "image_url", image_url: { url: a.dataUrl } });
-    } else {
+    } else if (a.dataUrl) {
       parts.push({ type: "file", file: { filename: a.name, file_data: a.dataUrl } });
     }
   }
@@ -75,7 +67,7 @@ function toApiContent(msg: ChatMessage): string | object[] {
 }
 
 function AttachmentPreview({ attachment }: { attachment: Attachment }) {
-  if (attachment.mediaType.startsWith("image/")) {
+  if (attachment.mediaType.startsWith("image/") && attachment.dataUrl) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
@@ -121,32 +113,28 @@ export function ChatInterface({
   const [isStreaming, setIsStreaming] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const submittingRef = useRef(false);
 
   const activeModel = models.find((m) => m.id === model);
   const supportsWebSearch = activeModel?.supportsWebSearch ?? false;
   const supportsImages = activeModel?.supportsImages ?? false;
 
-  const acceptTypes = supportsImages ? "image/*,application/pdf" : "application/pdf";
+  const acceptTypes = acceptForModel(supportsImages);
 
   async function handleFilesAdded(files: File[]) {
-    const usable = files.filter((f) => {
-      if (f.size > MAX_ATTACHMENT_BYTES) {
-        console.warn(`Skipping ${f.name}: larger than 10MB`);
-        return false;
-      }
-      if (f.type.startsWith("image/")) return supportsImages;
-      return f.type === "application/pdf";
-    });
-    if (!usable.length) return;
-    const loaded = await Promise.all(
-      usable.map(async (f) => ({
-        name: f.name,
-        mediaType: f.type,
-        dataUrl: await readFileAsDataUrl(f),
-      }))
+    setAttachmentError(null);
+    const results = await Promise.all(
+      files.map((f) => processFile(f, { supportsImages }))
     );
-    setAttachments((prev) => [...prev, ...loaded]);
+    const added: Attachment[] = [];
+    const errors: string[] = [];
+    for (const r of results) {
+      if (r.ok) added.push(r.attachment);
+      else errors.push(r.error);
+    }
+    if (added.length) setAttachments((prev) => [...prev, ...added]);
+    if (errors.length) setAttachmentError(errors.join(" "));
   }
 
   function removeAttachment(index: number) {
@@ -182,6 +170,7 @@ export function ChatInterface({
     commitMessages(history, true); // save: creates/updates conversation entry
     setInput("");
     setAttachments([]);
+    setAttachmentError(null);
     setIsStreaming(true);
 
     const apiMessages = history
@@ -420,6 +409,19 @@ export function ChatInterface({
       {/* Input */}
       <div className="border-t p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
+          {attachmentError && (
+            <div className="mb-2 flex items-start justify-between gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <span>{attachmentError}</span>
+              <button
+                type="button"
+                aria-label="Dismiss"
+                className="shrink-0 opacity-70 hover:opacity-100"
+                onClick={() => setAttachmentError(null)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           <FileUpload
             onFilesAdded={handleFilesAdded}
             accept={acceptTypes}
@@ -435,7 +437,7 @@ export function ChatInterface({
               <div className="flex flex-wrap gap-2 px-2 pt-1 pb-2">
                 {attachments.map((a, i) => (
                   <div key={i} className="relative">
-                    {a.mediaType.startsWith("image/") ? (
+                    {a.mediaType.startsWith("image/") && a.dataUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={a.dataUrl}
@@ -488,8 +490,8 @@ export function ChatInterface({
                     disabled={isStreaming}
                     title={
                       supportsImages
-                        ? "Attach images or PDFs"
-                        : "Attach PDFs (this model does not accept images)"
+                        ? "Attach images, PDFs, or documents"
+                        : "Attach PDFs or documents (this model does not accept images)"
                     }
                   >
                     <Paperclip className="h-4 w-4" />
@@ -539,8 +541,8 @@ export function ChatInterface({
               <p className="font-medium">Drop files to attach</p>
               <p className="text-sm text-muted-foreground">
                 {supportsImages
-                  ? "Images and PDFs are supported"
-                  : "PDFs only — this model does not accept images"}
+                  ? "Images, PDFs, and documents (.docx, .txt, .md, …)"
+                  : "PDFs and documents — this model does not accept images"}
               </p>
             </div>
           </FileUploadContent>

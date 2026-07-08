@@ -10,7 +10,10 @@ export interface Model {
 export interface Attachment {
   name: string;
   mediaType: string;
-  dataUrl: string;
+  // Present for images (incl. rasterized SVG) and PDFs; absent for text-extracted files.
+  dataUrl?: string;
+  // Present for text-extracted files (docx, plain text, code, SVG source).
+  text?: string;
 }
 
 export type ToolState = "input-streaming" | "output-available" | "output-error";
